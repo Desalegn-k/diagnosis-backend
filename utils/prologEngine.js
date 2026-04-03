@@ -1,10 +1,8 @@
 const pl = require("tau-prolog");
 
-// EMBEDDED PROLOG RULES - No file reading needed!
 const PROLOG_RULES = `
 :- dynamic has/1.
 
-/* ==================== SYMPTOM LISTS ==================== */
 disease_symptoms(malaria, [fever, headache, sweating]).
 disease_symptoms(flu, [fever, cough, fatigue]).
 disease_symptoms(pneumonia, [fever, cough, chest_pain]).
@@ -16,7 +14,6 @@ disease_symptoms(hypertension, [headache, dizziness, chest_pain, shortness_of_br
 disease_symptoms(asthma, [shortness_of_breath, wheezing, cough, chest_tightness]).
 disease_symptoms(tuberculosis, [chronic_cough, weight_loss, night_sweats, fever]).
 
-/* ==================== RECOMMENDATIONS ==================== */
 recommendation(malaria, 'Take antimalarial drugs and visit a hospital').
 recommendation(flu, 'Rest, fluids, and paracetamol').
 recommendation(pneumonia, 'Seek immediate medical attention').
@@ -28,7 +25,6 @@ recommendation(hypertension, 'Monitor blood pressure, reduce salt intake, and co
 recommendation(asthma, 'Use prescribed inhalers and avoid triggers; seek medical advice').
 recommendation(tuberculosis, 'Immediate medical evaluation and treatment; follow TB guidelines').
 
-/* ==================== PARTIAL MATCHING ==================== */
 partial_diagnosis(D, Confidence) :-
     disease_symptoms(D, Required),
     findall(S, (member(S, Required), has(S)), Present),
@@ -55,7 +51,7 @@ run_partial_diagnosis :-
 `;
 
 exports.runDiagnosis = (symptoms, callback) => {
-  console.log("Diagnosis called with symptoms:", symptoms);
+  console.log("runDiagnosis called with:", symptoms);
 
   if (!symptoms || symptoms.length === 0) {
     return callback(null, {
@@ -65,39 +61,30 @@ exports.runDiagnosis = (symptoms, callback) => {
     });
   }
 
-  // Create a new session
   const session = pl.create();
   let responded = false;
 
-  // Timeout after 5 seconds
   const timeout = setTimeout(() => {
     if (!responded) {
       responded = true;
-      console.error("Diagnosis timeout");
       callback(null, {
         disease: "unknown",
         recommendation: "Diagnosis timeout",
         confidence: 0,
       });
     }
-  }, 5000);
+  }, 10000);
 
-  // Load the embedded rules
   session.consult(PROLOG_RULES, {
     success: () => {
-      console.log("Prolog rules loaded successfully");
-
       // Clear existing facts
       session.query("retractall(has(_))");
       session.answer(() => {
         // Convert symptoms to proper format
         const symptomAtoms = symptoms.map((s) =>
-          s.toLowerCase().replace(/\s+/g, "_"),
+          String(s).toLowerCase().replace(/\s+/g, "_"),
         );
 
-        console.log("Processing symptoms:", symptomAtoms);
-
-        // Assert all symptoms
         let assertCount = 0;
         if (symptomAtoms.length === 0) {
           runQuery();
@@ -114,7 +101,6 @@ exports.runDiagnosis = (symptoms, callback) => {
         }
 
         function runQuery() {
-          console.log("Running diagnosis query...");
           session.query("run_partial_diagnosis.");
           session.answer((answer) => {
             if (!responded) {
@@ -123,9 +109,6 @@ exports.runDiagnosis = (symptoms, callback) => {
 
               if (answer) {
                 let output = answer.toString();
-                console.log("Raw output:", output);
-
-                // Clean output
                 output = output.replace(/[\[\]\\n]/g, "").trim();
                 const parts = output.split("|");
 
@@ -155,7 +138,7 @@ exports.runDiagnosis = (symptoms, callback) => {
       });
     },
     error: (err) => {
-      console.error("Failed to load Prolog rules:", err);
+      console.error("Prolog consultation error:", err);
       if (!responded) {
         responded = true;
         clearTimeout(timeout);
