@@ -1,37 +1,63 @@
 const pl = require("tau-prolog");
-const fs = require("fs");
-const path = require("path");
 
-// Load your Prolog rules
-const rulesPath = path.join(__dirname, "../prolog/diagnosis_rules.pl");
-console.log("========================================");
-console.log("PROLOG ENGINE INITIALIZATION");
-console.log("========================================");
-console.log("Looking for Prolog rules at:", rulesPath);
-console.log("File exists?", fs.existsSync(rulesPath));
+// EMBEDDED PROLOG RULES - No file reading needed!
+const PROLOG_RULES = `
+:- dynamic has/1.
 
-let prologSource = "";
-if (fs.existsSync(rulesPath)) {
-  prologSource = fs.readFileSync(rulesPath, "utf8");
-  console.log("✓ Prolog rules loaded successfully");
-  console.log("  File size:", prologSource.length, "bytes");
-  console.log("  First 200 chars:", prologSource.substring(0, 200));
-} else {
-  console.error("✗ ERROR: Prolog rules file not found!");
-}
+/* ==================== SYMPTOM LISTS ==================== */
+disease_symptoms(malaria, [fever, headache, sweating]).
+disease_symptoms(flu, [fever, cough, fatigue]).
+disease_symptoms(pneumonia, [fever, cough, chest_pain]).
+disease_symptoms(typhoid, [fever, headache, nausea, loss_of_appetite]).
+disease_symptoms(covid19, [fever, cough, fatigue, loss_of_taste]).
+disease_symptoms(common_cold, [runny_nose, sore_throat, cough]).
+disease_symptoms(diabetes, [frequent_urination, excessive_thirst, fatigue, blurred_vision]).
+disease_symptoms(hypertension, [headache, dizziness, chest_pain, shortness_of_breath]).
+disease_symptoms(asthma, [shortness_of_breath, wheezing, cough, chest_tightness]).
+disease_symptoms(tuberculosis, [chronic_cough, weight_loss, night_sweats, fever]).
+
+/* ==================== RECOMMENDATIONS ==================== */
+recommendation(malaria, 'Take antimalarial drugs and visit a hospital').
+recommendation(flu, 'Rest, fluids, and paracetamol').
+recommendation(pneumonia, 'Seek immediate medical attention').
+recommendation(typhoid, 'Take antibiotics as prescribed and drink clean water').
+recommendation(covid19, 'Isolate, get tested, and follow medical guidance').
+recommendation(common_cold, 'Rest, fluids, and warm drinks').
+recommendation(diabetes, 'Consult a doctor for blood sugar management and lifestyle changes').
+recommendation(hypertension, 'Monitor blood pressure, reduce salt intake, and consult a doctor').
+recommendation(asthma, 'Use prescribed inhalers and avoid triggers; seek medical advice').
+recommendation(tuberculosis, 'Immediate medical evaluation and treatment; follow TB guidelines').
+
+/* ==================== PARTIAL MATCHING ==================== */
+partial_diagnosis(D, Confidence) :-
+    disease_symptoms(D, Required),
+    findall(S, (member(S, Required), has(S)), Present),
+    length(Required, Total),
+    length(Present, Count),
+    Total > 0,
+    Confidence is (Count / Total) * 100.
+
+max_confidence([D-C], D, C).
+max_confidence([D1-C1, D2-C2 | T], BestD, BestC) :-
+    (   C1 > C2
+    ->  max_confidence([D1-C1 | T], BestD, BestC)
+    ;   max_confidence([D2-C2 | T], BestD, BestC)
+    ).
+
+run_partial_diagnosis :-
+    findall(D-C, partial_diagnosis(D,C), Results),
+    (   Results == []
+    ->  write('unknown|No clear diagnosis|0')
+    ;   max_confidence(Results, BestD, BestC),
+        recommendation(BestD, R),
+        write(BestD), write('|'), write(R), write('|'), write(BestC)
+    ).
+`;
 
 exports.runDiagnosis = (symptoms, callback) => {
-  console.log("\n========================================");
-  console.log("RUNNING DIAGNOSIS");
-  console.log("========================================");
-  console.log("Symptoms received:", symptoms);
-  console.log("Symptoms type:", typeof symptoms);
-  console.log("Is array?", Array.isArray(symptoms));
-  console.log("Symptoms length:", symptoms?.length);
+  console.log("Diagnosis called with symptoms:", symptoms);
 
-  // Validate input
   if (!symptoms || symptoms.length === 0) {
-    console.log("✗ No symptoms provided");
     return callback(null, {
       disease: "unknown",
       recommendation: "No symptoms provided",
@@ -39,93 +65,97 @@ exports.runDiagnosis = (symptoms, callback) => {
     });
   }
 
-  if (!prologSource) {
-    console.error("✗ Prolog rules not loaded");
-    return callback(null, {
-      disease: "unknown",
-      recommendation: "Prolog rules not loaded",
-      confidence: 0,
-    });
-  }
-
-  console.log("✓ Input validation passed");
-
   // Create a new session
   const session = pl.create();
   let responded = false;
-  let startTime = Date.now();
 
-  // Set timeout to prevent hanging
+  // Timeout after 5 seconds
   const timeout = setTimeout(() => {
     if (!responded) {
       responded = true;
-      console.error("✗ Diagnosis timeout after 10 seconds");
+      console.error("Diagnosis timeout");
       callback(null, {
         disease: "unknown",
         recommendation: "Diagnosis timeout",
         confidence: 0,
       });
     }
-  }, 10000);
+  }, 5000);
 
-  console.log("Consulting Prolog rules...");
-
-  // Consult the Prolog rules
-  session.consult(prologSource, {
+  // Load the embedded rules
+  session.consult(PROLOG_RULES, {
     success: () => {
-      console.log("✓ Prolog rules consulted successfully");
+      console.log("Prolog rules loaded successfully");
 
-      // First, clear any existing has/1 facts
-      console.log("Clearing existing facts...");
+      // Clear existing facts
       session.query("retractall(has(_))");
       session.answer(() => {
-        console.log("✓ Existing facts cleared");
+        // Convert symptoms to proper format
+        const symptomAtoms = symptoms.map((s) =>
+          s.toLowerCase().replace(/\s+/g, "_"),
+        );
 
-        // Convert symptoms to Prolog atoms
-        const symptomAtoms = symptoms.map((s) => {
-          let atom = String(s).toLowerCase().trim();
-          atom = atom.replace(/\s+/g, "_");
-          return atom;
-        });
+        console.log("Processing symptoms:", symptomAtoms);
 
-        console.log("Converted symptoms:", symptomAtoms);
-
-        // Assert each symptom
+        // Assert all symptoms
         let assertCount = 0;
-        console.log(`Asserting ${symptomAtoms.length} symptoms...`);
-
         if (symptomAtoms.length === 0) {
-          console.log("No symptoms to assert, running diagnosis directly");
-          runDiagnosisQuery(session, callback, responded, timeout, startTime);
+          runQuery();
         } else {
-          symptomAtoms.forEach((atom, index) => {
-            console.log(
-              `Asserting symptom ${index + 1}/${symptomAtoms.length}: ${atom}`,
-            );
+          symptomAtoms.forEach((atom) => {
             session.query(`assert(has(${atom}))`);
             session.answer(() => {
               assertCount++;
-              console.log(
-                `✓ Asserted ${atom} (${assertCount}/${symptomAtoms.length})`,
-              );
-
               if (assertCount === symptomAtoms.length) {
-                console.log("✓ All symptoms asserted, running diagnosis...");
-                runDiagnosisQuery(
-                  session,
-                  callback,
-                  responded,
-                  timeout,
-                  startTime,
-                );
+                runQuery();
               }
             });
+          });
+        }
+
+        function runQuery() {
+          console.log("Running diagnosis query...");
+          session.query("run_partial_diagnosis.");
+          session.answer((answer) => {
+            if (!responded) {
+              responded = true;
+              clearTimeout(timeout);
+
+              if (answer) {
+                let output = answer.toString();
+                console.log("Raw output:", output);
+
+                // Clean output
+                output = output.replace(/[\[\]\\n]/g, "").trim();
+                const parts = output.split("|");
+
+                if (parts.length >= 3 && parts[0] !== "unknown") {
+                  callback(null, {
+                    disease: parts[0],
+                    recommendation: parts[1],
+                    confidence: parseInt(parts[2]) || 0,
+                  });
+                } else {
+                  callback(null, {
+                    disease: "unknown",
+                    recommendation: "No clear diagnosis",
+                    confidence: 0,
+                  });
+                }
+              } else {
+                callback(null, {
+                  disease: "unknown",
+                  recommendation: "No clear diagnosis",
+                  confidence: 0,
+                });
+              }
+            }
           });
         }
       });
     },
     error: (err) => {
-      console.error("✗ Failed to consult Prolog rules:", err);
+      console.error("Failed to load Prolog rules:", err);
       if (!responded) {
         responded = true;
         clearTimeout(timeout);
@@ -138,118 +168,3 @@ exports.runDiagnosis = (symptoms, callback) => {
     },
   });
 };
-
-function runDiagnosisQuery(session, callback, responded, timeout, startTime) {
-  console.log("\n--- Running partial diagnosis query ---");
-  console.log("Elapsed time:", Date.now() - startTime, "ms");
-
-  // Run the partial diagnosis
-  session.query("run_partial_diagnosis.");
-  console.log("Query sent: run_partial_diagnosis.");
-
-  // Get the answer
-  session.answer((answer) => {
-    const elapsed = Date.now() - startTime;
-    console.log("\n--- Answer received ---");
-    console.log("Elapsed time:", elapsed, "ms");
-    console.log("Answer type:", typeof answer);
-    console.log("Answer value:", answer);
-
-    if (answer) {
-      // Try to get the output in different ways
-      let output = "";
-
-      // Method 1: Direct toString
-      if (typeof answer === "string") {
-        output = answer;
-        console.log("Method 1 (string):", output);
-      }
-
-      // Method 2: toString method
-      else if (answer.toString) {
-        output = answer.toString();
-        console.log("Method 2 (toString):", output);
-      }
-
-      // Method 3: Check for _ object (Tau Prolog internal)
-      else if (answer["_"] && answer["_"].stdout) {
-        output = answer["_"].stdout;
-        console.log("Method 3 (_.stdout):", output);
-      }
-
-      // Method 4: Check for stdout property
-      else if (answer.stdout) {
-        output = answer.stdout;
-        console.log("Method 4 (stdout):", output);
-      }
-
-      // Method 5: Check for goal_output in session
-      else if (session.goal_output) {
-        output = session.goal_output;
-        console.log("Method 5 (session.goal_output):", output);
-      }
-
-      // Method 6: JSON stringify the whole answer
-      else {
-        try {
-          output = JSON.stringify(answer);
-          console.log("Method 6 (JSON.stringify):", output);
-        } catch (e) {
-          console.log("Could not stringify answer");
-        }
-      }
-
-      // Clean up the output
-      let cleanedOutput = output
-        .replace(/\\n/g, "")
-        .replace(/\\r/g, "")
-        .replace(/\[/g, "")
-        .replace(/\]/g, "")
-        .trim();
-      console.log("Cleaned output:", cleanedOutput);
-
-      // Parse the output - expected format: "disease|recommendation|confidence"
-      const parts = cleanedOutput.split("|");
-      console.log("Split parts:", parts);
-
-      if (!responded) {
-        responded = true;
-        clearTimeout(timeout);
-
-        if (parts.length >= 3 && parts[0] !== "unknown" && parts[0] !== "") {
-          const disease = parts[0];
-          const recommendation = parts[1];
-          const confidence = parseInt(parts[2], 10) || 0;
-
-          console.log(`\n✓✓✓ DIAGNOSIS SUCCESSFUL ✓✓✓`);
-          console.log(`Disease: ${disease}`);
-          console.log(`Confidence: ${confidence}%`);
-          console.log(`Recommendation: ${recommendation}`);
-
-          callback(null, { disease, recommendation, confidence });
-        } else {
-          console.log(`\n✗ No clear diagnosis found`);
-          console.log(`Raw output: "${cleanedOutput}"`);
-          console.log(`Parts:`, parts);
-
-          callback(null, {
-            disease: "unknown",
-            recommendation: "No clear diagnosis for the selected symptoms",
-            confidence: 0,
-          });
-        }
-      }
-    } else {
-      console.log("✗ No answer from Prolog (answer is null/false)");
-      if (!responded) {
-        responded = true;
-        clearTimeout(timeout);
-        callback(null, {
-          disease: "unknown",
-          recommendation: "No clear diagnosis",
-          confidence: 0,
-        });
-      }
-    }
-  });
-}

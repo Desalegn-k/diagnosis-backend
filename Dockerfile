@@ -2,15 +2,14 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files first (for better caching)
 COPY package*.json ./
-RUN npm install
+RUN npm ci --only=production
 
-# Copy application code (explicitly include prolog folder)
+# Copy the rest of the application
 COPY . .
 
-# Verify the prolog file exists after copy
-RUN ls -la prolog/ && head -5 prolog/diagnosis_rules.pl
-
 EXPOSE 5000
-CMD ["npm", "start"]
+
+# Start the application
+CMD ["node", "server.js"]
