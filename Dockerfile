@@ -1,20 +1,16 @@
-# Use official Node.js runtime (Alpine Linux - smaller size)
 FROM node:18-alpine
 
-# Set working directory inside container
 WORKDIR /app
 
-# Copy package.json and package-lock.json (if exists)
+# Copy package files
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
 
-# Copy the rest of your application
+# Copy application code (explicitly include prolog folder)
 COPY . .
 
-# Expose the port your app runs on
-EXPOSE 5000
+# Verify the prolog file exists after copy
+RUN ls -la prolog/ && head -5 prolog/diagnosis_rules.pl
 
-# Start the application
+EXPOSE 5000
 CMD ["npm", "start"]
