@@ -1,21 +1,20 @@
-# Use an official Node.js runtime (Debian-based)
-FROM node:18-bullseye
-
-# Install SWI-Prolog (and clean up apt cache to keep image small)
-RUN apt-get update && apt-get install -y swi-prolog && rm -rf /var/lib/apt/lists/*
+# Use official Node.js runtime (Alpine Linux - smaller size)
+FROM node:18-alpine
 
 # Set working directory inside container
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy package.json and package-lock.json (if exists)
 COPY package*.json ./
+
+# Install dependencies
 RUN npm install
 
-# Copy the rest of the application (including your prolog folder)
+# Copy the rest of your application
 COPY . .
 
-# Expose the port your app listens on
+# Expose the port your app runs on
 EXPOSE 5000
 
-# Start the app
+# Start the application
 CMD ["npm", "start"]
