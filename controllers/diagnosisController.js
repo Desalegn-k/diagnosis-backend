@@ -2,71 +2,112 @@ const db = require("../config/db");
 const { runDiagnosis } = require("../utils/prologEngine");
 
 exports.evaluate = (req, res) => {
-  const { symptoms } = req.body; // These are symptom IDs
+  let { symptoms } = req.body;
   const userId = req.user.id;
 
-  if (!symptoms || symptoms.length === 0) {
-    return res.status(400).json({
-      message: "Please select at least one symptom",
-    });
+  console.log("=== DIAGNOSIS REQUEST ===");
+  console.log("Raw symptoms from frontend:", symptoms);
+
+  // Ensure symptoms is an array
+  if (!symptoms || !Array.isArray(symptoms) || symptoms.length === 0) {
+    return res
+      .status(400)
+      .json({ message: "Please select at least one symptom" });
   }
 
-  // FIRST: Fetch symptom names from the database using the IDs
-  const symptomIds = symptoms;
-  const sql = "SELECT name FROM symptoms WHERE id IN (?)";
+  // Convert symptom IDs to numbers (in case they're strings)
+  const symptomIds = symptoms.map((id) => {
+    const numId = parseInt(id, 10);
+    return isNaN(numId) ? id : numId;
+  });
 
-  db.query(sql, [symptomIds], (err, symptomRows) => {
+  console.log("Converted symptom IDs:", symptomIds);
+
+  // Build query with proper placeholders
+  const placeholders = symptomIds.map(() => "?").join(",");
+  const sql = `SELECT id, name FROM symptoms WHERE id IN (${placeholders})`;
+
+  console.log("SQL Query:", sql);
+  console.log("Query params:", symptomIds);
+
+  db.query(sql, symptomIds, (err, symptomRows) => {
+    console.log("Query result - Error:", err);
+    console.log("Rows returned:", symptomRows?.length || 0);
+
     if (err) {
-      console.error("Database error fetching symptoms:", err);
-      return res.status(500).json({ message: "Failed to fetch symptoms" });
+      console.error("Database error:", err);
+      return res
+        .status(500)
+        .json({ message: "Failed to fetch symptoms", error: err.message });
     }
 
-    if (symptomRows.length === 0) {
-      return res.status(400).json({ message: "Invalid symptoms selected" });
+    if (!symptomRows || symptomRows.length === 0) {
+      // Debug: Get all symptoms to help diagnose
+      db.query(
+        "SELECT id, name FROM symptoms LIMIT 20",
+        (err2, allSymptoms) => {
+          console.error("No matching symptoms found!");
+          console.error("Requested IDs:", symptomIds);
+          console.error("Available symptoms:", allSymptoms);
+
+          return res.status(400).json({
+            message: "Invalid symptoms selected",
+            debug: {
+              requestedIds: symptomIds,
+              availableSymptoms: allSymptoms || [],
+            },
+          });
+        },
+      );
+      return;
     }
 
-    // Convert symptom names to Prolog-friendly format (lowercase, underscores)
+    // Convert symptom names to Prolog-friendly format
     const symptomNames = symptomRows.map((row) =>
       row.name.toLowerCase().replace(/\s+/g, "_"),
     );
 
-    console.log("Symptom IDs received:", symptoms);
-    console.log("Symptom names for Prolog:", symptomNames);
+    console.log("✓ Found symptoms:", symptomNames);
 
-    // NOW call Prolog with the symptom NAMES
+    // Call Prolog engine with symptom names
     runDiagnosis(symptomNames, (err, result) => {
       if (err) {
         console.error("Prolog error:", err);
         return res.status(500).json({ message: "Diagnosis failed" });
       }
 
-      // ---- New rule: too few symptoms and low confidence ----
+      console.log("Prolog result:", result);
+
+      // Check for too few symptoms
       if (symptomNames.length < 3 && result.confidence < 30) {
         return res.json({
           disease: "Unknown",
           recommendation:
-            "Please provide more symptoms if you have or consult a medical professional",
+            "Please provide more symptoms or consult a medical professional",
           confidence: 0,
         });
       }
 
-      // Handle explicit "unknown" from Prolog
+      // Handle unknown diagnosis
       if (result.disease === "unknown") {
         return res.json({
           disease: "Unknown",
-          recommendation: result.recommendation || "No clear diagnosis",
+          recommendation:
+            result.recommendation ||
+            "No clear diagnosis for the selected symptoms",
           confidence: 0,
         });
       }
 
-      // Save to DB using the confidence from Prolog
+      // Save to database
       db.query(
         "SELECT id FROM diseases WHERE LOWER(name) = ?",
         [result.disease.toLowerCase()],
         (err, rows) => {
-          if (err || rows.length === 0) {
-            console.error("Disease not found in DB:", result.disease);
-            // Still return the diagnosis even if we can't save to history
+          if (err || !rows || rows.length === 0) {
+            console.warn(
+              "Disease not found in DB, but returning diagnosis anyway",
+            );
             return res.json({
               disease: result.disease,
               recommendation: result.recommendation,
@@ -79,15 +120,7 @@ exports.evaluate = (req, res) => {
             "INSERT INTO diagnosis (user_id, disease_id, confidence) VALUES (?, ?, ?)",
             [userId, diseaseId, result.confidence],
             (err) => {
-              if (err) {
-                console.error("Failed to save diagnosis:", err);
-                // Still return the diagnosis
-                return res.json({
-                  disease: result.disease,
-                  recommendation: result.recommendation,
-                  confidence: result.confidence,
-                });
-              }
+              if (err) console.error("Failed to save diagnosis:", err);
               res.json({
                 disease: result.disease,
                 recommendation: result.recommendation,
@@ -101,6 +134,7 @@ exports.evaluate = (req, res) => {
   });
 };
 
+// Keep your history and test functions unchanged...
 exports.history = (req, res) => {
   db.query(
     `SELECT d.created_at, di.name AS disease, d.confidence
@@ -111,10 +145,10 @@ exports.history = (req, res) => {
     [req.user.id],
     (err, rows) => {
       if (err) {
-        console.error("History fetch error:", err);
+        console.error("History error:", err);
         return res.status(500).json({ message: "Failed to fetch history" });
       }
-      res.json(rows);
+      res.json(rows || []);
     },
   );
 };
